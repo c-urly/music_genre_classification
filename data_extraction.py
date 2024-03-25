@@ -22,6 +22,7 @@ import librosa
 import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 
 
 def remove_files(folder_path):
@@ -50,83 +51,105 @@ def train_validate_test_split(df, train_percent=.5, validate_percent=.2, seed=No
     return train, validate, test
 
 def rename_songs(df, split='train'):
-  file_names = list()
-  for index, row in df.iterrows():
-    file_names.append(split + '_song_'+str(index))
+    file_names = list()
+    for index, row in df.iterrows():
+        file_names.append(split + '_song_'+str(index))
     # df = pd.DataFrame({row['file_name'],row['label']})
-  df['file_name'] = file_names
-  return df
+    df['file_name'] = file_names
+    return df
 
 def get_feature():
   pass
 
-# Take 10sec snippets from each
+def extend_or_cut_song(song, length):
+    current_length = song.shape[1]
+    if current_length < length:
+        # Calculate the required padding
+        pad_length = length - current_length    
+        # Pad with zeros
+        song_padded = np.pad(song, ((0, 0), (0, pad_length)), 'constant', constant_values=(0, 0))
+    else:
+    # No padding needed, but let's trim it just in case it's longer
+        song_padded = song[:, :length]
+    return torch.tensor(song_padded,dtype=torch.float32)
+
+# Take 10sec snippets.
 def take_ns_snippets(song, sr, chunk_len_s=10):
 
+    MAX_LENGTH = 441000
+
+    song = extend_or_cut_song(song,MAX_LENGTH)
+    # print("Song Shape:",song.shape[1])
     num_frames = song.shape[1]
     # num_frames = num_frames - (num_frames % 10)
     # print(" song duration in multiple of 10:",(num_frames))
     duration = int(song.shape[1] / sr)
-    print(duration)
+    # print(duration)
     chunk_frames = sr * chunk_len_s
     # print("chunk frames:", chunk_frames)
+
     chunks = [song[:,i:i + chunk_frames] for i in range(0, num_frames, chunk_frames)]
     
     return chunks
 
-def store_snipped_data(df, folder_path, split,features):
-  snip_df = pd.DataFrame()
-  data_split_path = os.path.join(folder_path,split)
-  remove_files(data_split_path)
-  for index, row in df.iterrows():
-    # print(row['file_name'],row['label'])
-    song_name = split + '_song_' + str(index)
-    # print('changed_name: '+ song_name)
+def store_snipped_data(df, folder_path, split, features):
+    # snip_df = pd.DataFrame()
+    data_split_path = os.path.join(folder_path,split)
+    remove_files(data_split_path)
+    total_snippets = 0
+    pbar = tqdm(total=len(df.index))
+    for index, row in df.iterrows():
+        # print(row['file_name'],row['label'])
+        song_name = split + '_song_' + str(index)
+        # print('changed_name: '+ song_name)
 
-    song,sr = torchaudio.load(row['file_name'])
-    print("SAMPLE_RATE:",sr)
-    snippets = take_ns_snippets(song, sr, chunk_len_s=10)
-    # TODO:
-    # Make all the snippets same size/Discard < 10sec snippets
-    for id,snip in enumerate(snippets):
-      if snip.shape[1] != sr:
-        continue 
-      print("snippet Length:",snip.shape[1])
-      snip_song_name = song_name + '__snip_' + str(id) +'__'+ str(row['label']) + '.wav'
-      # print(snip_song_name)
-      # print(snip)
-      file_path = os.path.join(data_split_path,snip_song_name)
-      # print(file_path)
-      torchaudio.save(file_path,snip,sample_rate=sr,format='wav')
-    # Save snippets
+        song, sr = torchaudio.load(row['file_name'])
+        print("Song Name: ",row['file_name'])
+        print("Label: ",row['label'])
+        print("SAMPLE_RATE: ",sr)
+        snippets = take_ns_snippets(song, sr, chunk_len_s=10)
+        # print(len(snippets))
+        # print("sampling rate:",sr)
+        total_snippets += len(snippets)
+        for id, snip in tqdm(enumerate(snippets)):
+            # Make all the snippets same size/Discard < 10sec snippets
+            # print("snippet Length:",snip.shape[1])
+            snip_song_name = song_name + '__snip_' + str(id) +'__'+ str(row['label']) + '.wav'
+            # print(snip_song_name)
+            # print(snip)
+            file_path = os.path.join(data_split_path,snip_song_name)
+            # print(file_path)
+            torchaudio.save(file_path, snip, sample_rate=sr, format='wav')
+            # Save snippets
+        pbar.update(index)
+    print("{split} Snippets: ", total_snippets)
 
 def prepare_model_input(folder_path,split,feature, save=False):
-  data_path = os.path.join(folder_path,split)
-  songs = glob.glob(os.path.join(data_path,'*.wav'))
-  #  Convert snips to tensor, label them, label with snip name as well.[tensor,label,song_name]
-  # Make a pickle file and save it in same folder path if save = True
-  dataset = []
-  for s in songs:
-    # print(s)
-    if feature == 'raw_waveform':
-      tens_wave, sr = torchaudio.load(s)
-      file_name = s.split('.')[0].split('/')[-1]
-      label = int(file_name.split('__')[-1])
-      dataset.append([tens_wave, (torch.tensor([label]),
-                                               file_name)])
-      # print(label,file_name)
-  random.shuffle(dataset)
-  random.shuffle(dataset)
-  random.shuffle(dataset)
-  random.shuffle(dataset)
-  random.shuffle(dataset)
-  if save == True:
-    # print(folder_path)
-    print(folder_path +f'_{feature}_{split}.pkl')
-    pickle.dump(dataset,open(folder_path +f'/{feature}_{split}.pkl','wb'))
-  
-  return dataset
-
+    data_path = os.path.join(folder_path,split)
+    songs = glob.glob(os.path.join(data_path,'*.wav'))
+    #  Convert snips to tensor, label them, label with snip name as well.[tensor,label,song_name]
+    # Make a pickle file and save it in same folder path if save = True
+    dataset = []
+    for s in songs:
+        # print(s)
+        if feature == 'raw_waveform':
+            tens_wave, sr = torchaudio.load(s)
+            file_name = s.split('.')[0].split('/')[-1]
+            label = int(file_name.split('__')[-1])
+            dataset.append([tens_wave, (torch.tensor([label]),
+                                                    file_name)])
+            # print(label,file_name)
+    random.shuffle(dataset)
+    random.shuffle(dataset)
+    random.shuffle(dataset)
+    random.shuffle(dataset)
+    random.shuffle(dataset)
+    if save == True:
+        # print(folder_path)
+        print(folder_path +f'_{feature}_{split}.pkl')
+        pickle.dump(dataset,open(folder_path +f'/{feature}_{split}.pkl','wb'))
+    
+    return dataset
 
 
 ###############################################################################################
@@ -141,17 +164,18 @@ prog_rock_path = os.path.join(dataset_dir_path,'Progressive_Rock_Songs')
 non_prog_rock_other_path = os.path.join(dataset_dir_path, 'Not_Progressive_Rock','Other_Songs')
 non_prog_rock_pop_path = os.path.join(dataset_dir_path,'Not_Progressive_Rock','Top_Of_The_Pops')
 drop_path = os.path.join(project_path, 'labeled_snip_dataset')
-os.mkdir(drop_path)
+# os.mkdir(drop_path)
+os.makedirs(drop_path,exist_ok=True)
 
 
 # Iterate over all feature and generate train,test,valid folder.
 for feature in features:
-  feature_path = os.path.join(drop_path,feature+f'_features')
+    feature_path = os.path.join(drop_path,feature+f'_features')
 
 ################### NEED TO delete files if we want to UPDATE dataset ##########################
-os.mkdir(feature_path,exist_ok=True)
+os.makedirs(feature_path,exist_ok=True)
 for s in ['train','test','valid']:
-    os.mkdir(os.path.join(feature_path,s),exist_ok=True)
+    os.makedirs(os.path.join(feature_path,s),exist_ok=True)
 
 feature_dataset_list = [x for x in os.listdir(drop_path)]
 print(feature_dataset_list)
@@ -183,8 +207,8 @@ train_split, valid_split, test_split = train_validate_test_split(df, train_perce
 
 print(df)
 
-#Snipiffy
-
+# #Snipiffy
+print("Snippifyy.....")
 df_train = train_split
 df_test = test_split
 df_valid = valid_split
@@ -195,8 +219,11 @@ feature_path_list = [os.path.join(drop_path,f+'_features') for f in features]
 for f in features:
     feature_path = os.path.join(drop_path,f+'_features')
     print(feature_path)
+    print("Snip Train Data")
     snip_df_train = store_snipped_data(df_train, feature_path, split='train',features=f)
+    print("Snip Valid Data")
     snip_df_valid = store_snipped_data(df_valid, feature_path,split='valid',features=f)
+    print("Snip Test Data")
     snip_df_test = store_snipped_data(df_test, feature_path,split='test',features=f)
 
 
@@ -206,4 +233,3 @@ for f in features:
     fpath = os.path.join(drop_path,f+'_features')
     for split in ['train','test','valid']:
         dataset = prepare_model_input(fpath, split, feature=f,save=True)
-    # print(songs)
