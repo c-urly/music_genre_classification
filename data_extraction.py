@@ -65,7 +65,7 @@ def get_feature():
 #     current_length = song.shape[1]
 #     if current_length < length:
 #         # Calculate the required padding
-#         pad_length = length - current_length    
+#         pad_length = length - current_length
 #         # Pad with zeros
 #         song_padded = np.pad(song, ((0, 0), (0, pad_length)), 'constant', constant_values=(0, 0))
 #     else:
@@ -79,13 +79,13 @@ def take_ns_snippets(song, sr, chunk_len_s=10):
     channels, total_samples = song.shape
     num_full_snippets = total_samples // samples_per_10_sec
     snippets = []
-    
+
     for i in range(num_full_snippets):
         start_sample = i * samples_per_10_sec
         end_sample = start_sample + samples_per_10_sec
         snippet = song[:, start_sample:end_sample]
         snippets.append(snippet)
-    
+
     return snippets
 
 def store_snipped_data(df, folder_path, split, features):
@@ -141,10 +141,10 @@ def prepare_model_input(folder_path,split,feature, save=False):
     random.shuffle(dataset)
     random.shuffle(dataset)
     if save == True:
-        # print(folder_path)
-        print(folder_path +f'_{feature}_{split}.pkl')
-        pickle.dump(dataset,open(os.path.join(folder_path, f'{feature}_{split}.pkl'),'wb'))
-    
+        path = os.path.join(folder_path, feature + '_' + split + '.pkl')
+        print(path)
+        pickle.dump(dataset,open(path,'wb'))
+
     return dataset
 
 
@@ -154,8 +154,9 @@ def prepare_model_input(folder_path,split,feature, save=False):
 features = ['raw_waveform']#,'mfcc','cqcc','spectogram']
 pwd = os.path.abspath(os.path.curdir)
 print(pwd)
-project_path = pwd #os.path.join(pwd,'drive', 'MyDrive', 'Prog_Rock_Project')
-dataset_dir_path = os.path.join(project_path,'Dataset')
+project_path = pwd 
+# project_path = os.path.join(pwd,'drive', 'MyDrive', 'Prog_Rock_Project') # for running on Colab
+dataset_dir_path = os.path.join(project_path,'Small_Dataset')
 prog_rock_path = os.path.join(dataset_dir_path,'Progressive_Rock_Songs')
 non_prog_rock_other_path = os.path.join(dataset_dir_path, 'Not_Progressive_Rock','Other_Songs')
 non_prog_rock_pop_path = os.path.join(dataset_dir_path,'Not_Progressive_Rock','Top_Of_The_Pops')
