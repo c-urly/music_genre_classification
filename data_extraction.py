@@ -61,36 +61,32 @@ def rename_songs(df, split='train'):
 def get_feature():
   pass
 
-def extend_or_cut_song(song, length):
-    current_length = song.shape[1]
-    if current_length < length:
-        # Calculate the required padding
-        pad_length = length - current_length    
-        # Pad with zeros
-        song_padded = np.pad(song, ((0, 0), (0, pad_length)), 'constant', constant_values=(0, 0))
-    else:
-    # No padding needed, but let's trim it just in case it's longer
-        song_padded = song[:, :length]
-    return torch.tensor(song_padded,dtype=torch.float32)
+# def extend_or_cut_song(song, length):
+#     current_length = song.shape[1]
+#     if current_length < length:
+#         # Calculate the required padding
+#         pad_length = length - current_length    
+#         # Pad with zeros
+#         song_padded = np.pad(song, ((0, 0), (0, pad_length)), 'constant', constant_values=(0, 0))
+#     else:
+#     # No padding needed, but let's trim it just in case it's longer
+#         song_padded = song[:, :length]
+#     return torch.tensor(song_padded,dtype=torch.float32)
 
 # Take 10sec snippets.
 def take_ns_snippets(song, sr, chunk_len_s=10):
-
-    MAX_LENGTH = 441000
-
-    song = extend_or_cut_song(song,MAX_LENGTH)
-    # print("Song Shape:",song.shape[1])
-    num_frames = song.shape[1]
-    # num_frames = num_frames - (num_frames % 10)
-    # print(" song duration in multiple of 10:",(num_frames))
-    duration = int(song.shape[1] / sr)
-    # print(duration)
-    chunk_frames = sr * chunk_len_s
-    # print("chunk frames:", chunk_frames)
-
-    chunks = [song[:,i:i + chunk_frames] for i in range(0, num_frames, chunk_frames)]
+    samples_per_10_sec = 10 * sr
+    channels, total_samples = song.shape
+    num_full_snippets = total_samples // samples_per_10_sec
+    snippets = []
     
-    return chunks
+    for i in range(num_full_snippets):
+        start_sample = i * samples_per_10_sec
+        end_sample = start_sample + samples_per_10_sec
+        snippet = song[:, start_sample:end_sample]
+        snippets.append(snippet)
+    
+    return snippets
 
 def store_snipped_data(df, folder_path, split, features):
     # snip_df = pd.DataFrame()
@@ -102,20 +98,20 @@ def store_snipped_data(df, folder_path, split, features):
         # print(row['file_name'],row['label'])
         song_name = split + '_song_' + str(index)
         # print('changed_name: '+ song_name)
-
-        song, sr = torchaudio.load(row['file_name'])
         print("Song Name: ",row['file_name'])
-        print("Label: ",row['label'])
-        print("SAMPLE_RATE: ",sr)
+        # print("Label: ",row['label'])
+        song, sr = torchaudio.load(row['file_name'])
+        # print("SAMPLE_RATE: ",sr)
         snippets = take_ns_snippets(song, sr, chunk_len_s=10)
-        # print(len(snippets))
+
         # print("sampling rate:",sr)
         total_snippets += len(snippets)
+        # print("Number of snippets:",total_snippets)
         for id, snip in tqdm(enumerate(snippets)):
             # Make all the snippets same size/Discard < 10sec snippets
             # print("snippet Length:",snip.shape[1])
             snip_song_name = song_name + '__snip_' + str(id) +'__'+ str(row['label']) + '.wav'
-            # print(snip_song_name)
+            print(snip_song_name)
             # print(snip)
             file_path = os.path.join(data_split_path,snip_song_name)
             # print(file_path)
@@ -147,7 +143,7 @@ def prepare_model_input(folder_path,split,feature, save=False):
     if save == True:
         # print(folder_path)
         print(folder_path +f'_{feature}_{split}.pkl')
-        pickle.dump(dataset,open(folder_path +f'/{feature}_{split}.pkl','wb'))
+        pickle.dump(dataset,open(os.path.join(folder_path, f'{feature}_{split}.pkl'),'wb'))
     
     return dataset
 

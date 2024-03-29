@@ -70,8 +70,7 @@ args = parser.parse_args()
 DATA_PATH = args.data_path
 LOG_PATH =  args.log_path
 BATCH_SIZE = 3
-test_set = Musi
-cDataset(DATA_PATH, BATCH_SIZE, data_type='test')
+test_set = MusicDataset(DATA_PATH, BATCH_SIZE, data_type='test')
 test_loader = torch.utils.data.DataLoader(test_set, batch_size=BATCH_SIZE,
                                               shuffle=True, drop_last=False)
 for idx, (data,label) in enumerate(test_loader):
