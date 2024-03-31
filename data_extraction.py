@@ -24,7 +24,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
-
+MAX_LENGTH = 441000
 def remove_files(folder_path):
   for filename in os.listdir(folder_path):
     file_path = os.path.join(folder_path, filename)
@@ -60,18 +60,6 @@ def rename_songs(df, split='train'):
 
 def get_feature():
   pass
-
-# def extend_or_cut_song(song, length):
-#     current_length = song.shape[1]
-#     if current_length < length:
-#         # Calculate the required padding
-#         pad_length = length - current_length
-#         # Pad with zeros
-#         song_padded = np.pad(song, ((0, 0), (0, pad_length)), 'constant', constant_values=(0, 0))
-#     else:
-#     # No padding needed, but let's trim it just in case it's longer
-#         song_padded = song[:, :length]
-#     return torch.tensor(song_padded,dtype=torch.float32)
 
 # Take 10sec snippets.
 def take_ns_snippets(song, sr, chunk_len_s=10):
@@ -115,7 +103,9 @@ def store_snipped_data(df, folder_path, split, features):
             # print(snip)
             file_path = os.path.join(data_split_path,snip_song_name)
             # print(file_path)
-            torchaudio.save(file_path, snip, sample_rate=sr, format='wav')
+            if snip.shape[0] == 2 and snip.shape[1] >= MAX_LENGTH:
+                total_snippets += 1
+                torchaudio.save(file_path, snip[:,:MAX_LENGTH], sample_rate=sr, format='wav')
             # Save snippets
         pbar.update(index)
     print("{split} Snippets: ", total_snippets)
@@ -132,7 +122,7 @@ def prepare_model_input(folder_path,split,feature, save=False):
             tens_wave, sr = torchaudio.load(s)
             file_name = s.split('.')[0].split('/')[-1]
             label = int(file_name.split('__')[-1])
-            dataset.append([tens_wave, (torch.tensor([label]),
+            dataset.append([tens_wave, (torch.tensor(label),
                                                     file_name)])
             # print(label,file_name)
     random.shuffle(dataset)
@@ -156,7 +146,8 @@ pwd = os.path.abspath(os.path.curdir)
 print(pwd)
 project_path = pwd 
 # project_path = os.path.join(pwd,'drive', 'MyDrive', 'Prog_Rock_Project') # for running on Colab
-dataset_dir_path = os.path.join(project_path,'Small_Dataset')
+#dataset_dir_path = os.path.join(project_path,'Small_Dataset')
+dataset_dir_path = os.path.join(project_path,'Dataset')
 prog_rock_path = os.path.join(dataset_dir_path,'Progressive_Rock_Songs')
 non_prog_rock_other_path = os.path.join(dataset_dir_path, 'Not_Progressive_Rock','Other_Songs')
 non_prog_rock_pop_path = os.path.join(dataset_dir_path,'Not_Progressive_Rock','Top_Of_The_Pops')
