@@ -244,7 +244,7 @@ def test_binary(model, epoch, data_loader, device, BATCH_SIZE):
     test_accuracy = 100. * correct / len(data_loader.dataset)
     return test_loss, test_accuracy, area_under_curv
 
-def train(BASE_PATH):
+def train(BASE_PATH,feature):
     BATCH_SIZE = 60
     learning_rate = 0.001
     num_epochs = 50
@@ -266,8 +266,8 @@ def train(BASE_PATH):
     model.to(device)
     kwargs = {'num_workers': num_workers,
               'pin_memory': True} if use_cuda else {}
-    train_set = MusicDataset(train_dir, feature='mfcc')
-    test_set = MusicDataset(test_dir, feature='mfcc')
+    train_set = MusicDataset(train_dir, feature)
+    test_set = MusicDataset(test_dir, feature)
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=BATCH_SIZE,shuffle=True, drop_last=False,**kwargs)
     
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=BATCH_SIZE,shuffle=True, drop_last=False,**kwargs)
@@ -305,7 +305,7 @@ def train(BASE_PATH):
             model.save_model(BASE_PATH + '/checkpoints/f%03d.pt' % epoch, num_to_keep=5)
             return model, device
 
-def validate_a_classifier(BASE_PATH, device_instant, num_classes=1):    
+def validate_a_classifier(BASE_PATH, device_instant, num_classes=1,feature='raw_waveform'):    
     num_workers = 0
     EPOCHS = 5000
     BATCH_SIZE=60
@@ -330,7 +330,7 @@ def validate_a_classifier(BASE_PATH, device_instant, num_classes=1):
     print(f"Updated_model({0}): {model}")
     model.to(device)
     print(f"{model}")
-    valid_set = MusicDataset(test_dir, feature='mfcc')
+    valid_set = MusicDataset(test_dir, feature)
     valid_loader = torch.utils.data.DataLoader(valid_set, batch_size=BATCH_SIZE,shuffle=True, drop_last=False,**kwargs)
 
 
@@ -348,10 +348,10 @@ def validate_a_classifier(BASE_PATH, device_instant, num_classes=1):
 
     return model, device
 
-train(feature_path)
+train(feature_path,feature='specgram')
 
 
-# validate_a_classifier(feature_path, device)
+validate_a_classifier(feature_path, device,feature='specgram')
 # for data, (label,file_name) in train_loader:
 #     print(data.shape, label.shape)
 
