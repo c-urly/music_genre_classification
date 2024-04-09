@@ -24,7 +24,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
-
+MAX_LENGTH = 441000
 def remove_files(folder_path):
   for filename in os.listdir(folder_path):
     file_path = os.path.join(folder_path, filename)
@@ -61,30 +61,42 @@ def rename_songs(df, split='train'):
 def get_feature():
   pass
 
-# def extend_or_cut_song(song, length):
-#     current_length = song.shape[1]
-#     if current_length < length:
-#         # Calculate the required padding
-#         pad_length = length - current_length    
-#         # Pad with zeros
-#         song_padded = np.pad(song, ((0, 0), (0, pad_length)), 'constant', constant_values=(0, 0))
-#     else:
-#     # No padding needed, but let's trim it just in case it's longer
-#         song_padded = song[:, :length]
-#     return torch.tensor(song_padded,dtype=torch.float32)
-
 # Take 10sec snippets.
-def take_ns_snippets(song, sr, chunk_len_s=10):
-    samples_per_10_sec = 10 * sr
-    channels, total_samples = song.shape
-    num_full_snippets = total_samples // samples_per_10_sec
+def take_ns_snippets(audio, snippet_duration=10, sr=44100):
+
+    snippet_length_samples = snippet_duration * sr
+    
+    # Calculate the number of full snippets and the length of the last snippet
+    num_full_snippets = audio.shape[1] // snippet_length_samples
+    last_snippet_length = audio.shape[1] % snippet_length_samples
+    
+    # Initialize a list to hold all snippets
     snippets = []
     
+    # Extract full snippets
     for i in range(num_full_snippets):
-        start_sample = i * samples_per_10_sec
-        end_sample = start_sample + samples_per_10_sec
-        snippet = song[:, start_sample:end_sample]
+        start_sample = i * snippet_length_samples
+        snippet = audio[:,start_sample:start_sample + snippet_length_samples]
+        # print(snippet.shape)
+        if snippet.size(-1) != MAX_LENGTH:
+            print(snippet.shape)
+            print("snippet not of same size")
+            assert snippet.shape[1] == MAX_LENGTH
         snippets.append(snippet)
+    
+    # Handle the last snippet if there's a remainder
+    if last_snippet_length > 0:
+        last_snippet = audio[:,-last_snippet_length:]
+        # Calculate padding
+        total_padding = (snippet_length_samples - last_snippet_length)
+        if audio.ndim == 2: 
+            padded_snippet = np.pad(last_snippet, ((0, 0), (0,total_padding)), mode='constant', constant_values=0)
+        else:
+            padded_snippet = np.pad(last_snippet, (0,total_padding), mode='constant', constant_values=0)
+        padded_snippet = torch.from_numpy(padded_snippet).float()
+        if padded_snippet.size(-1) != MAX_LENGTH:
+            print("snippet not of same size")
+        snippets.append(padded_snippet)
     
     return snippets
 
@@ -93,32 +105,37 @@ def store_snipped_data(df, folder_path, split, features):
     data_split_path = os.path.join(folder_path,split)
     remove_files(data_split_path)
     total_snippets = 0
-    pbar = tqdm(total=len(df.index))
-    for index, row in df.iterrows():
+    pbar = tqdm(total=len(df.index), desc="Processing")
+    for index, row in tqdm(df.iterrows()):
         # print(row['file_name'],row['label'])
         song_name = split + '_song_' + str(index)
         # print('changed_name: '+ song_name)
         print("Song Name: ",row['file_name'])
         # print("Label: ",row['label'])
         song, sr = torchaudio.load(row['file_name'])
+        if song.shape[0] == 1:
+            pbar.update(1)
+            continue
         # print("SAMPLE_RATE: ",sr)
-        snippets = take_ns_snippets(song, sr, chunk_len_s=10)
+        snippets = take_ns_snippets(song)
 
         # print("sampling rate:",sr)
         total_snippets += len(snippets)
-        # print("Number of snippets:",total_snippets)
+        print("Number of snippets:",total_snippets)
         for id, snip in tqdm(enumerate(snippets)):
             # Make all the snippets same size/Discard < 10sec snippets
-            # print("snippet Length:",snip.shape[1])
             snip_song_name = song_name + '__snip_' + str(id) +'__'+ str(row['label']) + '.wav'
-            print(snip_song_name)
+            # print(snip_song_name)
             # print(snip)
+            # print("snippet Length:",snip.shape)
             file_path = os.path.join(data_split_path,snip_song_name)
             # print(file_path)
+            # if snip.shape[0] == 2 and snip.shape[1] >= MAX_LENGTH:
+            total_snippets += 1
             torchaudio.save(file_path, snip, sample_rate=sr, format='wav')
             # Save snippets
-        pbar.update(index)
-    print("{split} Snippets: ", total_snippets)
+        pbar.update(1)
+    print(f"{split} Snippets: ", total_snippets)
 
 def prepare_model_input(folder_path,split,feature, save=False):
     data_path = os.path.join(folder_path,split)
@@ -141,10 +158,10 @@ def prepare_model_input(folder_path,split,feature, save=False):
     random.shuffle(dataset)
     random.shuffle(dataset)
     if save == True:
-        # print(folder_path)
-        print(folder_path +f'_{feature}_{split}.pkl')
-        pickle.dump(dataset,open(os.path.join(folder_path, f'{feature}_{split}.pkl'),'wb'))
-    
+        path = os.path.join(folder_path, feature + '_' + split + '.pkl')
+        print(path)
+        pickle.dump(dataset,open(path,'wb'))
+
     return dataset
 
 
@@ -154,7 +171,9 @@ def prepare_model_input(folder_path,split,feature, save=False):
 features = ['raw_waveform']#,'mfcc','cqcc','spectogram']
 pwd = os.path.abspath(os.path.curdir)
 print(pwd)
-project_path = pwd #os.path.join(pwd,'drive', 'MyDrive', 'Prog_Rock_Project')
+project_path = pwd 
+# project_path = os.path.join(pwd,'drive', 'MyDrive', 'Prog_Rock_Project') # for running on Colab
+#dataset_dir_path = os.path.join(project_path,'Small_Dataset')
 dataset_dir_path = os.path.join(project_path,'Dataset')
 prog_rock_path = os.path.join(dataset_dir_path,'Progressive_Rock_Songs')
 non_prog_rock_other_path = os.path.join(dataset_dir_path, 'Not_Progressive_Rock','Other_Songs')
@@ -176,11 +195,6 @@ for s in ['train','test','valid']:
 feature_dataset_list = [x for x in os.listdir(drop_path)]
 print(feature_dataset_list)
 
-# train_drop_path = os.path.join(raw_waveform_feature,'train')
-# test_drop_path = os.path.join(raw_waveform_feature,'test')
-# valid_drop_path = os.path.join(raw_waveform_feature,'valid')
-
-
 # Read all the songs
 prog_rock_files_list = glob.glob(os.path.join(prog_rock_path,'*.mp3'))
 non_prog_rock_other_files_list = glob.glob(os.path.join(non_prog_rock_other_path,'*.mp3'))
@@ -197,9 +211,6 @@ df['label'] = prog_rock_label + non_prog_rock_label
 df = df.sample(frac=1).reset_index(drop=True)
 train_split, valid_split, test_split = train_validate_test_split(df, train_percent=0.7,validate_percent=0.15,seed=None)
 
-# print(train_split)
-# file_names = df['file_name']
-# file_names = [file_name.split(dir_path)[1].split('.')[0] for file_name in file_names]
 
 print(df)
 
@@ -225,7 +236,7 @@ for f in features:
 
 # Convert all the songs to model input
 
-for f in features:
-    fpath = os.path.join(drop_path,f+'_features')
-    for split in ['train','test','valid']:
-        dataset = prepare_model_input(fpath, split, feature=f,save=True)
+# for f in features:
+#     fpath = os.path.join(drop_path,f+'_features')
+#     for split in ['train','test','valid']:
+#         dataset = prepare_model_input(fpath, split, feature=f,save=True)
