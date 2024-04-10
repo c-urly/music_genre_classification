@@ -140,7 +140,6 @@ class OneDCNN(Model):
 
     def loss(self, prediction, label, reduction='mean'):
         return nn.BCEWithLogitsLoss(reduction='mean')(prediction, label)
->>>>>>> 1009a6e3d2972630230603b3c2c1d56709ad0f63
 
 
 
