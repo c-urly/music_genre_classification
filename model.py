@@ -14,44 +14,6 @@ from scipy.io.wavfile import read
 from torch import nn
 from torch.nn import functional as F
 
-<<<<<<< HEAD
-class MusicDataset(torch.utils.data.Dataset):
-    def __init__(self, data_dir, batch_size, data_type='train', label_index=0):
-        super(MusicDataset, self).__init__()
-
-        self.data_dir = data_dir
-        self.batch_size = batch_size
-
-        pkl_list = glob.glob(os.path.join(data_dir,'*.pkl'))
-        print(pkl_list)
-        file_name = [file for file in pkl_list if data_type in file][0]
-        print(file_name)
-        data_pkl = open(file_name,'rb')
-        self.data = pickle.load(data_pkl)
-        data_pkl.close()
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, index):
-        return self.data[index][0], self.data[index][1][0]
-
-parser = argparse.ArgumentParser()
-parser.add_argument("-d","--data_path", help = "Path to model Inputs(pkl files)")
-parser.add_argument("-l","--log_path",help="Path to save the logs and model")
-args = parser.parse_args()
-
-DATA_PATH = args.data_path
-LOG_PATH =  args.log_path
-BATCH_SIZE = 3
-test_set = MusicDataset(DATA_PATH, BATCH_SIZE, data_type='test')
-test_loader = torch.utils.data.DataLoader(test_set, batch_size=BATCH_SIZE,
-                                              shuffle=True, drop_last=False)
-for idx, (data,label) in enumerate(test_loader):
-    print(idx, data.shape, label.shape)
-
-
-=======
 import torch
 import pt_util
 
