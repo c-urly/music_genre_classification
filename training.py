@@ -247,7 +247,7 @@ def test_binary(model, epoch, data_loader, device, BATCH_SIZE):
 def train(BASE_PATH,feature):
     BATCH_SIZE = 60
     learning_rate = 0.001
-    num_epochs = 50
+    num_epochs = 4
     WEIGHT_DECAY = 0.00005
     SCHEDULER_EPOCH_STEP = 4
     SCHEDULER_GAMMA = 0.8
@@ -348,10 +348,10 @@ def validate_a_classifier(BASE_PATH, device_instant, num_classes=1,feature='raw_
 
     return model, device
 
-train(feature_path,feature='specgram')
+train(feature_path,feature='mfcc')
 
 
-validate_a_classifier(feature_path, device,feature='specgram')
+validate_a_classifier(feature_path, device,feature='mfcc')
 # for data, (label,file_name) in train_loader:
 #     print(data.shape, label.shape)
 
