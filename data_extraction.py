@@ -14,6 +14,7 @@ import torch
 import torchaudio
 import torchaudio.functional as F
 import torchaudio.transforms as T
+import torchaudio.prototype as PT
 
 print(torch.__version__)
 print(torchaudio.__version__)
@@ -111,7 +112,7 @@ def store_snipped_data(df, folder_path, split, features):
         song_name = split + '_song_' + str(index)
         # print('changed_name: '+ song_name)
         print("Song Name: ",row['file_name'])
-        # print("Label: ",row['label'])
+        print("Label: ",row['label'])
         song, sr = torchaudio.load(row['file_name'])
         if song.shape[0] == 1:
             pbar.update(1)
@@ -124,41 +125,80 @@ def store_snipped_data(df, folder_path, split, features):
         print("Number of snippets:",total_snippets)
         for id, snip in tqdm(enumerate(snippets)):
             # Make all the snippets same size/Discard < 10sec snippets
-            snip_song_name = song_name + '__snip_' + str(id) +'__'+ str(row['label']) + '.wav'
-            # print(snip_song_name)
+            snip_song_name = os.path.basename(row['file_name']).split('.')[0] + '__snip_' + str(id) +'__'+ str(row['label']) + '.mp3'
+            print(snip_song_name)
             # print(snip)
             # print("snippet Length:",snip.shape)
             file_path = os.path.join(data_split_path,snip_song_name)
             # print(file_path)
             # if snip.shape[0] == 2 and snip.shape[1] >= MAX_LENGTH:
             total_snippets += 1
-            torchaudio.save(file_path, snip, sample_rate=sr, format='wav')
+            torchaudio.save(file_path, snip, sample_rate=sr, format='mp3')
             # Save snippets
         pbar.update(1)
     print(f"{split} Snippets: ", total_snippets)
 
-def prepare_model_input(folder_path,split,feature, save=False):
+def get_mfcc(waveform, sample_rate):
+  n_fft = 2048
+  win_length = None
+  hop_length = 512
+  n_mels = 256
+  n_mfcc = 256
+
+  mfcc_transform = T.MFCC(
+      sample_rate=sample_rate,
+      n_mfcc=n_mfcc,
+      melkwargs={
+          "n_fft": n_fft,
+          "n_mels": n_mels,
+          "hop_length": hop_length,
+          "mel_scale": "htk",
+      },
+  )
+
+  return mfcc_transform(waveform)
+
+def get_chromagram(waveform, sample_rate):
+    chromaspectrogram = PT.ChromaSpectrogram(sample_rate=sample_rate,n_chroma=20, n_fft=1024)
+    signal = chromaspectrogram(waveform)
+    return signal
+
+def get_specgram(waveform,sr):
+    spectrogram = T.Spectrogram(n_fft=512)
+    return spectrogram(waveform)
+
+def prepare_model_input(folder_path,split,feature, feature_drop_path,save=False):
     data_path = os.path.join(folder_path,split)
-    songs = glob.glob(os.path.join(data_path,'*.wav'))
+    songs = glob.glob(os.path.join(data_path,'*.mp3'))
     #  Convert snips to tensor, label them, label with snip name as well.[tensor,label,song_name]
     # Make a pickle file and save it in same folder path if save = True
     dataset = []
+    print(len(songs))
     for s in songs:
         # print(s)
+        tens_wave, sr = torchaudio.load(s,normalize=True)
+        # file_name = s.split('.')[0].split('/')[-1]
+        file_name = s
+        label = int(file_name.split('__')[-1].split('.')[0])
         if feature == 'raw_waveform':
-            tens_wave, sr = torchaudio.load(s)
-            file_name = s.split('.')[0].split('/')[-1]
-            label = int(file_name.split('__')[-1])
-            dataset.append([tens_wave, (torch.tensor([label]),
-                                                    file_name)])
+            tens_data = tens_wave
             # print(label,file_name)
+        if feature == 'mfcc':
+            tens_data = get_mfcc(tens_wave, sr)
+        if feature == 'specgram':
+            tens_data = get_specgram(tens_wave,sr)
+        if feature == 'chroma':
+            tens_data = get_chromagram(tens_wave,sr)
+        
+        dataset.append([tens_data, (torch.tensor([label]),
+                                                    file_name)])
     random.shuffle(dataset)
     random.shuffle(dataset)
     random.shuffle(dataset)
     random.shuffle(dataset)
     random.shuffle(dataset)
     if save == True:
-        path = os.path.join(folder_path, feature + '_' + split + '.pkl')
+        path = os.path.join(feature_drop_path, feature + '_' + split + '.pkl')
         print(path)
         pickle.dump(dataset,open(path,'wb'))
 
@@ -169,26 +209,35 @@ def prepare_model_input(folder_path,split,feature, save=False):
 
 # pwd = os.path.curdir
 features = ['raw_waveform']#,'mfcc','cqcc','spectogram']
+# features = ['mfcc']
 pwd = os.path.abspath(os.path.curdir)
 print(pwd)
 project_path = pwd 
 # project_path = os.path.join(pwd,'drive', 'MyDrive', 'Prog_Rock_Project') # for running on Colab
 #dataset_dir_path = os.path.join(project_path,'Small_Dataset')
+
 dataset_dir_path = os.path.join(project_path,'Dataset')
 prog_rock_path = os.path.join(dataset_dir_path,'Progressive_Rock_Songs')
-non_prog_rock_other_path = os.path.join(dataset_dir_path, 'Not_Progressive_Rock','Other_Songs')
-non_prog_rock_pop_path = os.path.join(dataset_dir_path,'Not_Progressive_Rock','Top_Of_The_Pops')
+non_prog_rock_path = os.path.join(dataset_dir_path, 'Not_Progressive_Rock')
+non_prog_rock_other_path = os.path.join(non_prog_rock_path,'Other_Songs')
+non_prog_rock_pop_path = os.path.join(non_prog_rock_path,'Top_Of_The_Pops')
+
 drop_path = os.path.join(project_path, 'labeled_snip_dataset')
+
+# test path
+# test_dataset_dir_path = os.path.join(project_path,'test_set')
+# prog_rock_path = os.path.join(dataset_dir_path,'Progressive_Rock_Songs')
+# non_prog_rock_other_path = os.path.join(dataset_dir_path, 'Not_Progressive_Rock')
 # os.mkdir(drop_path)
 os.makedirs(drop_path,exist_ok=True)
 
 
 # Iterate over all feature and generate train,test,valid folder.
 for feature in features:
-    feature_path = os.path.join(drop_path,feature+f'_features')
-
+    feature_path = os.path.join(drop_path,feature)
+    os.makedirs(feature_path,exist_ok=True)
 ################### NEED TO delete files if we want to UPDATE dataset ##########################
-os.makedirs(feature_path,exist_ok=True)
+
 for s in ['train','test','valid']:
     os.makedirs(os.path.join(feature_path,s),exist_ok=True)
 
@@ -207,24 +256,23 @@ df = pd.DataFrame(columns=['file_name','label'])
 df['file_name'] = prog_rock_files_list + non_prog_rock_files_list
 df['label'] = prog_rock_label + non_prog_rock_label
 
-# print(df)
+print(df)
 df = df.sample(frac=1).reset_index(drop=True)
 train_split, valid_split, test_split = train_validate_test_split(df, train_percent=0.7,validate_percent=0.15,seed=None)
 
 
-print(df)
 
 # #Snipiffy
 print("Snippifyy.....")
 df_train = train_split
-df_test = test_split
+df_test =  test_split
 df_valid = valid_split
 
 # Store snippets
-print(df_valid)
-feature_path_list = [os.path.join(drop_path,f+'_features') for f in features]
+# print(df_valid)
+feature_path_list = [os.path.join(drop_path,f) for f in features]
 for f in features:
-    feature_path = os.path.join(drop_path,f+'_features')
+    feature_path = os.path.join(drop_path,f)
     print(feature_path)
     print("Snip Train Data")
     snip_df_train = store_snipped_data(df_train, feature_path, split='train',features=f)
@@ -235,8 +283,15 @@ for f in features:
 
 
 # Convert all the songs to model input
+snip_path = os.path.join(drop_path,'raw_waveform')
+feature_path = '/blue/srampazzi/bhattr/music_genre_classification/labeled_snip_dataset/'
+for f in features:
+    fpath = os.path.join(feature_path)
+    for split in ['train','test','valid']:
+        dataset = prepare_model_input(snip_path, split, f,os.path.join(fpath,f),save=True)
 
-# for f in features:
-#     fpath = os.path.join(drop_path,f+'_features')
-#     for split in ['train','test','valid']:
-#         dataset = prepare_model_input(fpath, split, feature=f,save=True)
+# snip_path = '/blue/srampazzi/bhattr/music_genre_classification/labeled_test_snip/raw_waveform/'
+# fpath = '/blue/srampazzi/bhattr/music_genre_classification/labeled_test_snip/'
+# dataset = prepare_model_input(snip_path,'test','raw_waveform',fpath,save=True)
+
+

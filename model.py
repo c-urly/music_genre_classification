@@ -6,8 +6,8 @@ from multiprocessing import Process
 from subprocess import call
 
 from dataclasses import dataclass
-
-
+from collections import OrderedDict
+from functools import partial
 import numpy as np
 from scipy.io.wavfile import read
 
@@ -16,6 +16,12 @@ from torch.nn import functional as F
 
 import torch
 import pt_util
+from transformers import (
+    HubertForSequenceClassification,
+    # PretrainedConfig,
+    HubertConfig,
+    AutoConfig, Wav2Vec2FeatureExtractor, HubertPreTrainedModel, HubertModel,
+)
 
 
 class Model(nn.Module):
@@ -42,182 +48,177 @@ class Model(nn.Module):
         return nn.BCEWithLogitsLoss(reduction='mean')(prediction, label)
 
 
-class TwoDCNN(Model):
-    def __init__(self, num_classes=1):
-        super(TwoDCNN, self).__init__()
-        
-        self.conv1 = nn.Conv2d(in_channels=2, out_channels=32, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-        self.bn1 = nn.BatchNorm2d(32)
-        self.pool1 = nn.MaxPool2d(kernel_size=(2, 4), stride=(2, 4))
-        
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=(3, 3), padding=(1, 1))
-        self.bn2 = nn.BatchNorm2d(64)
-        self.pool2 = nn.MaxPool2d(kernel_size=(2, 4), stride=(2, 4))
-        
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=(3, 3), padding=(1, 1))
-        self.bn3 = nn.BatchNorm2d(128)
-        self.pool3 = nn.MaxPool2d(kernel_size=(2, 4), stride=(2, 4))
 
-        # Remove dynamic calculation for simplicity in this example
-        # Assuming fixed input size, calculate _to_linear based on the architecture and input dimensions
-        # This calculation needs to be adjusted based on the actual size after the pooling layers
-        # self._to_linear = 128 * 32 * 54  
+class Conv2dAuto(nn.Conv2d):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.padding =  (self.kernel_size[0] // 2, self.kernel_size[1] // 2) # dynamic add padding based on the kernel_size
         
-        self.fc1 = nn.Linear(53248, 1024)
-        self.drop1 = nn.Dropout(0.5)
-        self.fc2 = nn.Linear(1024, 128)
-        self.fc3 = nn.Linear(128, num_classes)
+conv3x3 = partial(Conv2dAuto, kernel_size=3, bias=False)
 
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.in_channels, self.out_channels =  in_channels, out_channels
+        self.blocks = nn.Identity()
+        self.shortcut = nn.Identity()   
+    
     def forward(self, x):
-        x = self.pool1(F.relu(self.bn1(self.conv1(x))))
-        x = self.pool2(F.relu(self.bn2(self.conv2(x))))
-        x = self.pool3(F.relu(self.bn3(self.conv3(x))))
-        
-        # Flatten the tensor while keeping the batch dimension
-        x = torch.flatten(x, start_dim=1)
-        
-        x = F.relu(self.fc1(x))
-        x = self.drop1(x)
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
+        residual = x
+        if self.should_apply_shortcut: residual = self.shortcut(x)
+        x = self.blocks(x)
+        x += residual
         return x
+    
+    @property
+    def should_apply_shortcut(self):
+        return self.in_channels != self.out_channels
 
+class ResNetResidualBlock(ResidualBlock):
+    def __init__(self, in_channels, out_channels, expansion=1, downsampling=1, conv=conv3x3, *args, **kwargs):
+        super().__init__(in_channels, out_channels)
+        self.expansion, self.downsampling, self.conv = expansion, downsampling, conv
+        self.shortcut = nn.Sequential(OrderedDict(
+        {
+            'dropout' : nn.Dropout(0.02),
+            'conv' : nn.Conv2d(self.in_channels, self.expanded_channels,
+                               kernel_size=1, stride=self.downsampling,
+                               bias=False),
+            'bn' : nn.BatchNorm2d(self.expanded_channels)
+        })) if self.should_apply_shortcut else None
+           
+    @property
+    def expanded_channels(self):
+        return self.out_channels * self.expansion
+    
+    @property
+    def should_apply_shortcut(self):
+        return self.in_channels != self.expanded_channels
 
+def conv_bn(in_channels, out_channels, conv, *args, **kwargs):
+    return nn.Sequential(OrderedDict({'dropout' : nn.Dropout(0.02),
+                                      'conv': conv(in_channels, out_channels,
+                                                   *args, **kwargs), 
+                                      'bn': nn.BatchNorm2d(out_channels)}))
 
-class OneDCNN(Model):
-    def __init__(self, input_channels=2, input_length=441000):
-        super(OneDCNN, self).__init__()
-        
-
-        self.conv1 = nn.Conv1d(in_channels=2,out_channels=16, kernel_size=3, stride=1, padding=1)
-        self.conv2 = nn.Conv1d(in_channels=16, out_channels=32, kernel_size=3, stride=1, padding=1)
-        self.conv3 = nn.Conv1d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1)
-        
-        self.pool = nn.MaxPool1d(4, stride=4)
-        
-
-        self._to_linear = 0
-        self.conv_output_size(input_length)
-        
-        # Fully connected layers
-        self.fc1 = nn.Linear(self._to_linear, 256)  # Dynamically set based on conv_output_size calculation
-        self.fc2 = nn.Linear(256, 64)
-        
-        # Output layer for binary classification
-        self.output = nn.Linear(64, 1)
-        
-    def conv_output_size(self, L_in, kernel_size=3, stride=1, padding=1, pool_kernel_size=4, pool_stride=4):
-
-        def calc_output_length(L_in, kernel_size, stride, padding, dilation=1):
-            return ((L_in + (2 * padding) - dilation * (kernel_size - 1) - 1) // stride) + 1
-        
-
-        L_out = calc_output_length(L_in, kernel_size, stride, padding)
-        L_out = calc_output_length(L_out, pool_kernel_size, pool_stride, 0) 
-        L_out = calc_output_length(L_out, kernel_size, stride, padding)
-        L_out = calc_output_length(L_out, pool_kernel_size, pool_stride, 0)
-        L_out = calc_output_length(L_out, kernel_size, stride, padding)
-        L_out = calc_output_length(L_out, pool_kernel_size, pool_stride, 0)
-
-        self._to_linear = 64 * L_out
-
-    def forward(self, x):
-
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = self.pool(F.relu(self.conv3(x)))
-        
-        # Flatten the output for the fully connected layers
-        x = x.view(-1, self._to_linear)
-        
-
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        
-
-        x = self.output(x)
-        return x
-
-    def loss(self, prediction, label, reduction='mean'):
-        return nn.BCEWithLogitsLoss(reduction='mean')(prediction, label)
-
-
-
-
-##################################################
-class TrialCNN(nn.Module):
-    def __init__(self):
-        super(TrialCNN, self).__init__()
-
-        self.layer1 = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3,  padding=1),
-            nn.BatchNorm2d(16),
-            #nn.ReLU(),
-            nn.LeakyReLU(),
-            nn.MaxPool2d(kernel_size=3, stride=2,  padding=1)
+class ResNetBasicBlock(ResNetResidualBlock):
+    expansion = 1
+    def __init__(self, in_channels, out_channels, activation=nn.ReLU, *args, **kwargs):
+        super().__init__(in_channels, out_channels, *args, **kwargs)
+        self.blocks = nn.Sequential(
+            conv_bn(self.in_channels, self.out_channels, conv=self.conv, bias=False, stride=self.downsampling),
+            activation(),
+            conv_bn(self.out_channels, self.expanded_channels, conv=self.conv, bias=False),
         )
 
-        self.layer2 = nn.Sequential(
-            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            #nn.ReLU(),
-            nn.LeakyReLU(),
+class ResNetBottleNeckBlock(ResNetResidualBlock):
+    expansion = 4
+    def __init__(self, in_channels, out_channels, activation=nn.ReLU, *args, **kwargs):
+        super().__init__(in_channels, out_channels, expansion=4, *args, **kwargs)
+        self.blocks = nn.Sequential(
+           conv_bn(self.in_channels, self.out_channels, self.conv, kernel_size=1),
+             activation(),
+             conv_bn(self.out_channels, self.out_channels, self.conv, kernel_size=3, stride=self.downsampling),
+             activation(),
+             conv_bn(self.out_channels, self.expanded_channels, self.conv, kernel_size=1),
+        )
+
+class ResNetLayer(nn.Module):
+    def __init__(self, in_channels, out_channels, block=ResNetBasicBlock, n=1, *args, **kwargs):
+        super().__init__()
+        # 'We perform downsampling directly by convolutional layers that have a stride of 2.'
+        downsampling = 2 if in_channels != out_channels else 1
+        
+        self.blocks = nn.Sequential(
+            block(in_channels , out_channels, *args, **kwargs, downsampling=downsampling),
+            *[block(out_channels * block.expansion, 
+                    out_channels, downsampling=1, *args, **kwargs) for _ in range(n - 1)]
+        )
+
+    def forward(self, x):
+        x = self.blocks(x)
+        return x
+
+class ResNetEncoder(nn.Module):
+    """
+    ResNet encoder composed by increasing different layers with increasing features.
+    """
+    def __init__(self, in_channels=3, blocks_sizes=[64, 128, 256, 512], deepths=[2,2,2,2], 
+                 activation=nn.ReLU, block=ResNetBasicBlock, *args,**kwargs):
+        super().__init__()
+        
+        self.blocks_sizes = blocks_sizes
+        
+        self.gate = nn.Sequential(
+            nn.Conv2d(in_channels, self.blocks_sizes[0], kernel_size=7, stride=2, padding=3, bias=False),
+            nn.BatchNorm2d(self.blocks_sizes[0]),
+            activation(),
             nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         )
-
-        self.layer3 = nn.Sequential(
-        nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, padding=1),
-        nn.BatchNorm2d(32),
-        #nn.ReLU(),
-        nn.LeakyReLU(),
-        nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        )
-
-        self.layer4 = nn.Sequential(
-        nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, padding=1),
-        nn.BatchNorm2d(32),
-        #nn.ReLU(),
-        nn.LeakyReLU(),
-        nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        )
-
-        self.layer5 = nn.Sequential(
-        nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, padding=1),
-        nn.BatchNorm2d(32),
-        #nn.ReLU(),
-        nn.LeakyReLU(),
-        nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        )
-
-        self.fc1 = nn.Sequential(
-            # nn.Linear(in_features=882048, out_features=100),
-            nn.Linear(in_features=8832, out_features=1000),
-            #nn.ReLU()
-            nn.LeakyReLU(),
-        )
-        self.drop = nn.Dropout(0.25)
-
-        self.fc2 = nn.Sequential(
-            nn.Linear(in_features=1000, out_features=100),
-            #nn.ReLU()
-            nn.LeakyReLU(),
-        )
-        self.drop = nn.Dropout(0.25)
-
-        self.fc3 = nn.Linear(in_features=100, out_features=2)
+        
+        self.in_out_block_sizes = list(zip(blocks_sizes, blocks_sizes[1:]))
+        self.blocks = nn.ModuleList([ 
+            ResNetLayer(blocks_sizes[0], blocks_sizes[0], n=deepths[0], activation=activation, 
+                        block=block,  *args, **kwargs),
+            *[ResNetLayer(in_channels * block.expansion, 
+                          out_channels, n=n, activation=activation, 
+                          block=block, *args, **kwargs) 
+              for (in_channels, out_channels), n in zip(self.in_out_block_sizes, deepths[1:])]       
+        ])
+    def forward(self, x):
+        x = self.gate(x)
+        for block in self.blocks:
+            x = block(x)
+        return x
+        
+class ResnetDecoder(nn.Module):
+    """
+    This class represents the tail of ResNet. It performs a global pooling and maps the output to the
+    correct class by using a fully connected layer.
+    """
+    def __init__(self, in_features, n_classes):
+        super().__init__()
+        self.avg = nn.AdaptiveAvgPool2d((1, 1))
+        self.decoder = nn.Linear(in_features, n_classes)
 
     def forward(self, x):
-        out = self.layer1(x)
-        out = self.layer2(out)
-        out = self.layer3(out)
-        out = self.layer4(out)
-        out = self.layer5(out)
-        out = out.view(out.size(0), -1)
-        out = self.fc1(out)
-        out = self.drop(out)
-        out = self.fc2(out)
-        out = self.drop(out)
-        out = self.fc3(out)
+        x = self.avg(x)
+        x = x.view(x.size(0), -1)
+        x = self.decoder(x)
+        return x       
 
-        return out
-#################################################################
+class ResNet(Model):
+    
+    def __init__(self, in_channels, n_classes, *args, **kwargs):
+        super().__init__()
+        self.best_accuracy = 0
+        self.n_classes = n_classes
+        self.encoder = ResNetEncoder(in_channels, *args, **kwargs)
+        self.decoder = ResnetDecoder(self.encoder.blocks[-1].blocks[-1].expanded_channels, n_classes)
+        
+    def forward(self, x):
+        x = self.encoder(x)
+        x = self.decoder(x)
+        return x
+        
+    def loss(self, prediction, label, reduction='mean'):
+        if self.n_classes == 1:
+            return nn.BCEWithLogitsLoss(reduction='mean')(prediction, label)
+        else:
+            return nn.CrossEntropyLoss()(prediction, label)
+
+
+def resnet18(in_channels, n_classes):
+    return ResNet(in_channels, n_classes, block=ResNetBasicBlock, deepths=[2, 2, 2, 2])
+
+def resnet34(in_channels, n_classes):
+    return ResNet(in_channels, n_classes, block=ResNetBasicBlock, deepths=[3, 4, 6, 3])
+
+def resnet50(in_channels, n_classes):
+    return ResNet(in_channels, n_classes, block=ResNetBottleNeckBlock, deepths=[3, 4, 6, 3])
+
+def resnet101(in_channels, n_classes):
+    return ResNet(in_channels, n_classes, block=ResNetBottleNeckBlock, deepths=[3, 4, 23, 3])
+
+def resnet152(in_channels, n_classes):
+    return ResNet(in_channels, n_classes, block=ResNetBottleNeckBlock, deepths=[3, 8, 36, 3])
